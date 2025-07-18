@@ -23,9 +23,13 @@ class Game:
         self.stage = []
         self.spikes = []
         self.enemies = []
+        self.bullets = []
         self.goal = (0,0,0,0,0)
         self.max_enemies = 20
         self.enemy_spawn_timer = 0
+        self.coins = []
+        self.score = 0
+        self.create_sprites()
         self.setup_level()
 
         # Game State
@@ -84,19 +88,48 @@ class Game:
         
         self.stage.extend(platforms)
 
-        # 4. Place Initial Patrol Enemies
-        patrol_count = 0
+        # 5. Generate Coins
         for x, y, w, h, col in self.stage:
-            if w > 60 and random.random() < 0.5 and patrol_count < 4:
+            for i in range(x, x + w, 16):
+                if random.random() < 0.2: # 20% chance for a coin
+                    self.coins.append((i + 4, y - 12, 8, 8, 10)) # Yellow coins
+
+        # 6. Place Initial Enemies (Patrol and Shooter)
+        patrol_count = 0
+        shooter_count = 0
+        for x, y, w, h, col in self.stage:
+            # Place Patrol enemies on the ground
+            if y == 132 and w > 60 and random.random() < 0.5 and patrol_count < 4:
                 enemy_x = x + 10
                 self.enemies.append({
                     'x': enemy_x, 'y': y - 8, 'speed': random.choice([-0.8, 0.8]),
                     'type': 'patrol', 'min_x': x, 'max_x': x + w - 8, 'color': 8 # Red
                 })
                 patrol_count += 1
+            # Place Shooter enemies on platforms
+            elif y != 132 and w > 40 and random.random() < 0.4 and shooter_count < 3:
+                enemy_x = x + w // 2 - 4
+                self.enemies.append({
+                    'x': enemy_x, 'y': y - 8, 'type': 'shooter', 'shoot_timer': random.randint(60, 120),
+                    'color': 14 # Dark Blue
+                })
+                shooter_count += 1
         
-        # 5. Set Goal Position
+        # 7. Set Goal Position
         self.goal = (self.world_width - 40, 116, 8, 16, 11)
+
+    def create_sprites(self):
+        # Coin Sprite (8x8) at img=0, u=0, v=0
+        pyxel.image(0).set(0, 0, [
+            "00AA0000",
+            "0A7AA000",
+            "A7999A00",
+            "A9999A00",
+            "A9999A00",
+            "A9999A00",
+            "0AAAA000",
+            "00AA0000",
+        ])
 
     def update(self):
         if not self.game_started:
@@ -115,6 +148,7 @@ class Game:
 
         self.update_player()
         self.update_enemies()
+        self.update_bullets()
         self.check_collisions()
         self.update_camera()
 
@@ -170,6 +204,20 @@ class Game:
                 enemy['x'] += enemy['speed']
                 if enemy['x'] < enemy['min_x'] or enemy['x'] > enemy['max_x']:
                     enemy['speed'] *= -1
+            elif enemy['type'] == 'shooter':
+                enemy['shoot_timer'] -= 1
+                player_dist = abs(self.player_x - enemy['x'])
+                if enemy['shoot_timer'] <= 0 and player_dist < 120:
+                    # Shoot a bullet towards the player
+                    dx = self.player_x - enemy['x']
+                    dy = self.player_y - enemy['y']
+                    dist = (dx**2 + dy**2)**0.5
+                    if dist > 0:
+                        self.bullets.append({
+                            'x': enemy['x'] + 4, 'y': enemy['y'] + 4,
+                            'vx': (dx / dist) * 2, 'vy': (dy / dist) * 2, 'color': 8
+                        })
+                    enemy['shoot_timer'] = random.randint(100, 160)
             elif enemy['type'] == 'stream':
                 enemy['x'] += enemy['speed']
                 if enemy['x'] < self.camera_x - 20: self.enemies.remove(enemy)
@@ -180,6 +228,15 @@ class Game:
                 if dist > 0: enemy['x'] += (dx / dist) * enemy['speed']; enemy['y'] += (dy / dist) * enemy['speed']
                 if enemy['x'] < self.camera_x - 20: self.enemies.remove(enemy)
 
+    def update_bullets(self):
+        for bullet in self.bullets[:]:
+            bullet['x'] += bullet['vx']
+            bullet['y'] += bullet['vy']
+            # Remove bullets that are off-screen
+            if (bullet['x'] < self.camera_x or bullet['x'] > self.camera_x + pyxel.width or
+                bullet['y'] < 0 or bullet['y'] > pyxel.height):
+                self.bullets.remove(bullet)
+
     def check_collisions(self):
         # Player vs Enemies
         if self.invincible_timer == 0:
@@ -188,6 +245,16 @@ class Game:
                     self.player_health -= 1; self.invincible_timer = 120
                     if self.player_health <= 0: self.game_over = True
                     break
+        # Player vs Bullets
+        if self.invincible_timer == 0:
+            for bullet in self.bullets[:]:
+                if abs(self.player_x - bullet['x']) < 4 and abs(self.player_y - bullet['y']) < 4:
+                    self.player_health -= 1
+                    self.invincible_timer = 120
+                    self.bullets.remove(bullet)
+                    if self.player_health <= 0: self.game_over = True
+                    break # Exit after one hit
+
         # Player vs Spikes
         if self.invincible_timer == 0:
             for x, y, w, h, col in self.spikes:
@@ -195,6 +262,15 @@ class Game:
                     self.player_health -= 1; self.invincible_timer = 120
                     if self.player_health <= 0: self.game_over = True
                     break
+
+        # Player vs Coins
+        for coin in self.coins[:]:
+            cx, cy, cw, ch, ccol = coin
+            if (self.player_x + 8 > cx and self.player_x < cx + cw and
+                self.player_y + 8 > cy and self.player_y < cy + ch):
+                self.coins.remove(coin)
+                self.score += 10
+
         # Player vs Goal
         gx, gy, gw, gh, gcol = self.goal
         if (self.player_x + 8 > gx and self.player_x < gx + gw and self.player_y + 8 > gy and self.player_y < gy + gh):
@@ -214,8 +290,12 @@ class Game:
         # Draw stage, spikes, goal
         for x, y, w, h, col in self.stage: pyxel.rect(x, y, w, h, col)
         for x, y, w, h, col in self.spikes: pyxel.rect(x, y, w, h, col) # Spikes are now color 6
+        for x, y, w, h, col in self.coins: pyxel.blt(x, y, 0, 0, 0, w, h, 0)
         gx, gy, gw, gh, gcol = self.goal
         pyxel.rect(gx, gy, gw, gh, gcol)
+        # Draw bullets
+        for bullet in self.bullets:
+            pyxel.rect(bullet['x'], bullet['y'], 2, 2, bullet['color'])
         # Draw enemies
         for enemy in self.enemies: pyxel.rect(enemy['x'], enemy['y'], 8, 8, enemy['color'])
         # Draw player
@@ -224,6 +304,7 @@ class Game:
         pyxel.camera()
         # Draw UI
         pyxel.text(5, 5, f"Health: {self.player_health}", 7)
+        pyxel.text(80, 5, f"Score: {self.score}", 7)
         pyxel.text(180, 5, f"Time: {self.time_left // 60}", 7)
         if self.game_over: pyxel.text(110, 70, "GAME OVER", 8); pyxel.text(90, 90, "Press R to Restart", 7)
         if self.game_clear: pyxel.text(110, 70, "GAME CLEAR!", 11); pyxel.text(90, 90, "Press R to Restart", 7)
@@ -236,6 +317,9 @@ class Game:
         self.player_health = 3
         self.jumps_left = 2
         self.invincible_timer = 0
+        self.coins.clear()
+        self.bullets.clear()
+        self.score = 0
         self.setup_level()
         self.enemy_spawn_timer = 0
         self.time_left = 180 * 60
