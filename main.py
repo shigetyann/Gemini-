@@ -129,6 +129,7 @@ class Game:
             "A9999A00",
             "0AAAA000",
             "00AA0000",
+            " ",
         ])
 
     def update(self):
